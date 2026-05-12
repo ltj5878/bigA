@@ -172,7 +172,9 @@ def api_announcements(symbol: str, days: int = 30):
 
 
 # ---------- 模块六：策略层 ----------
+from strategy_layer.aggressive_alpha import run_strategy as _run_aggressive_alpha
 from strategy_layer.magic_formula import run_strategy as _run_magic_formula
+from strategy_layer.strategy_search import run_aggressive_alpha_search as _run_aggressive_search
 from strategy_layer.three_factor import run_strategy as _run_three_factor
 
 
@@ -205,19 +207,25 @@ from strategy_layer.backtest import run_backtest as _run_backtest
 def api_strategy_backtest(
     start: str = Query("2022-01-01"),
     end: str | None = Query(None),
+    strategy: str = Query("three_factor", description="three_factor / aggressive_alpha"),
     top_n: int = Query(25, ge=5, le=100),
     universe_scope: str = Query("hs300_zz500"),
     use_timing: bool = Query(True),
     max_per_industry: int = Query(3, ge=0, le=25,
                                   description="单一申万一级行业最大入选数；0=不限制"),
+    min_mcap_yi: float = Query(30.0, ge=0),
+    min_f_score: int = Query(5, ge=0, le=9),
+    volatility_penalty: float = Query(0.2, ge=0, le=2.0),
     use_cache: bool = Query(True, description="结果级缓存（6h）"),
 ):
     """三因子策略回测：月度调仓 + 行业中性化 + 大盘择时，输出净值曲线和指标。"""
     result = _safe(
         _run_backtest,
-        start=start, end=end, top_n=top_n,
+        start=start, end=end, strategy=strategy, top_n=top_n,
         universe_scope=universe_scope, use_timing=use_timing,
-        max_per_industry=max_per_industry, use_cache=use_cache,
+        max_per_industry=max_per_industry, min_mcap_yi=min_mcap_yi,
+        min_f_score=min_f_score, volatility_penalty=volatility_penalty,
+        use_cache=use_cache,
     )
     return _ok(result)
 
@@ -246,6 +254,54 @@ def api_strategy_three_factor(
         weight_q=weight_q, weight_v=weight_v,
         weight_m=weight_m, weight_s=weight_s,
         max_per_industry=max_per_industry,
+    )
+    return _ok(result)
+
+
+@app.get("/api/strategy/aggressive_alpha")
+def api_strategy_aggressive_alpha(
+    scope: str = Query("hs300_zz500"),
+    top_n: int = Query(10, ge=5, le=100),
+    min_mcap_yi: float = Query(30.0, ge=0),
+    min_f_score: int = Query(5, ge=0, le=9),
+    exclude_st: bool = Query(True),
+    use_cache: bool = Query(True),
+    volatility_penalty: float = Query(0.2, ge=0, le=2.0),
+    max_per_industry: int = Query(2, ge=0, le=25),
+):
+    """激进 Alpha 选股：趋势/动量主导 + 波动惩罚 + F-Score 过滤。"""
+    result = _safe(
+        _run_aggressive_alpha,
+        scope=scope,
+        top_n=top_n,
+        min_mcap_yi=min_mcap_yi,
+        min_f_score=min_f_score,
+        exclude_st=exclude_st,
+        use_cache=use_cache,
+        volatility_penalty=volatility_penalty,
+        max_per_industry=max_per_industry,
+    )
+    return _ok(result)
+
+
+@app.get("/api/strategy/search/aggressive_alpha")
+def api_strategy_search_aggressive_alpha(
+    start: str = Query("2022-01-01"),
+    end: str | None = Query(None),
+    universe_scope: str = Query("hs300"),
+    min_mcap_yi: float = Query(30.0, ge=0),
+    min_f_score: int = Query(5, ge=0, le=9),
+    use_cache: bool = Query(True),
+):
+    """固定预设搜索：比较激进 Alpha 的收益、回撤、月胜率和单月 10%+ 次数。"""
+    result = _safe(
+        _run_aggressive_search,
+        start=start,
+        end=end,
+        universe_scope=universe_scope,
+        min_mcap_yi=min_mcap_yi,
+        min_f_score=min_f_score,
+        use_cache=use_cache,
     )
     return _ok(result)
 

@@ -19,6 +19,7 @@
         <label class="field">策略
           <select class="select" v-model="strategy">
             <option value="three_factor">三因子升级版（推荐）</option>
+            <option value="aggressive_alpha">激进 Alpha（研究型）</option>
             <option value="magic_formula">魔法公式（旧版对照）</option>
           </select>
         </label>
@@ -36,14 +37,17 @@
         <label class="field">最小市值(亿)
           <input class="input" type="number" min="0" v-model.number="minMcap" style="min-width:110px" />
         </label>
-        <label v-if="strategy === 'three_factor'" class="field">F-Score 最低
+        <label v-if="strategy !== 'magic_formula'" class="field">F-Score 最低
           <input class="input" type="number" min="0" max="9" v-model.number="minFScore" style="min-width:90px" />
         </label>
-        <label v-if="strategy === 'three_factor'" class="field">单行业上限
+        <label v-if="strategy !== 'magic_formula'" class="field">单行业上限
           <input class="input" type="number" min="0" max="25" v-model.number="maxPerIndustry" style="min-width:90px" />
         </label>
         <label v-if="strategy === 'three_factor'" class="field">情绪权重
           <input class="input" type="number" min="0" max="1" step="0.05" v-model.number="weightS" style="min-width:90px" />
+        </label>
+        <label v-if="strategy === 'aggressive_alpha'" class="field">波动惩罚
+          <input class="input" type="number" min="0" max="2" step="0.05" v-model.number="volatilityPenalty" style="min-width:90px" />
         </label>
         <label class="checkbox" style="margin-left:6px">
           <input type="checkbox" v-model="excludeST" /> 排除 ST
@@ -89,7 +93,7 @@
       </div>
 
       <div class="hint">
-        <strong>四因子权重</strong>：质量 0.35 / 价值 0.35 / 动量 0.15 / 情绪 {{ weightS }}；F-Score &lt; {{ minFScore }} 直接排除；单一申万一级行业最多 {{ maxPerIndustry }} 只。
+        <strong>{{ strategyHintTitle }}</strong>：{{ strategyHintText }}
         <strong>调仓对比</strong>：本月新入用 <span style="color:var(--ok)">绿色</span> 标记。
         <br><strong>仅供研究，不构成投资建议。</strong>
       </div>
@@ -98,6 +102,12 @@
     <!-- ============ 回测 Tab ============ -->
     <div v-else class="card">
       <div class="toolbar">
+        <label class="field">策略
+          <select class="select" v-model="bt.strategy">
+            <option value="three_factor">三因子升级版</option>
+            <option value="aggressive_alpha">激进 Alpha</option>
+          </select>
+        </label>
         <label class="field">回测起始
           <input class="input" type="date" v-model="bt.start" />
         </label>
@@ -116,11 +126,20 @@
         <label class="field">单行业上限
           <input class="input" type="number" min="0" max="25" v-model.number="bt.maxPerIndustry" style="min-width:90px" />
         </label>
+        <label v-if="bt.strategy === 'aggressive_alpha'" class="field">F-Score 最低
+          <input class="input" type="number" min="0" max="9" v-model.number="bt.minFScore" style="min-width:90px" />
+        </label>
+        <label v-if="bt.strategy === 'aggressive_alpha'" class="field">波动惩罚
+          <input class="input" type="number" min="0" max="2" step="0.05" v-model.number="bt.volatilityPenalty" style="min-width:90px" />
+        </label>
         <label class="checkbox" style="margin-left:6px">
           <input type="checkbox" v-model="bt.useTiming" /> 启用大盘择时
         </label>
         <button class="btn" :disabled="btLoading" @click="runBacktest">
           {{ btLoading ? '回测中…' : '运行回测' }}
+        </button>
+        <button v-if="bt.strategy === 'aggressive_alpha'" class="btn ghost" :disabled="searchLoading" @click="runSearch">
+          {{ searchLoading ? '搜索中…' : '搜索预设' }}
         </button>
       </div>
 
@@ -153,6 +172,14 @@
             </div>
             <div class="metric-sub">vs 沪深 300</div>
           </div>
+          <div class="metric"><div class="metric-label">单月 10%+</div>
+            <div class="metric-value">{{ btResult.metrics.months_ge_10pct ?? 0 }}</div>
+            <div class="metric-sub">历史出现次数</div>
+          </div>
+          <div class="metric"><div class="metric-label">最差单月</div>
+            <div class="metric-value neg">{{ pctSigned(btResult.metrics.worst_month) }}</div>
+            <div class="metric-sub">月度组合回报</div>
+          </div>
         </div>
 
         <!-- 净值曲线 -->
@@ -167,9 +194,32 @@
         </div>
       </div>
       <div v-else class="empty">配置参数后点击"运行回测"</div>
+      <div v-if="searchError" class="error">❌ {{ searchError }}</div>
+      <div v-if="searchResult" class="table-wrap search-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>预设</th><th>持仓</th><th>行业上限</th><th>波动惩罚</th>
+              <th>年化</th><th>最大回撤</th><th>夏普</th><th>单月10%+</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="r in searchResult.results" :key="r.preset" :class="{ 'row-new': r.preset === searchResult.best_preset }">
+              <td>{{ r.label }}</td>
+              <td>{{ r.params.top_n }}</td>
+              <td>{{ r.params.max_per_industry }}</td>
+              <td>{{ r.params.volatility_penalty }}</td>
+              <td>{{ pctSigned(r.metrics.annual_return) }}</td>
+              <td>{{ pctSigned(r.metrics.max_drawdown) }}</td>
+              <td>{{ r.metrics.sharpe }}</td>
+              <td>{{ r.metrics.months_ge_10pct ?? 0 }}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
 
       <div class="hint">
-        回测说明：每月初按当时的财报和估值排名 Top N，等权重持有 1 个月；启用择时则跌破 200 日均线时仅 30% 仓位。
+        回测说明：每月初按当时的财报、估值和价格趋势排名 Top N，等权重持有 1 个月；启用择时则跌破 200 日均线时仅 30% 仓位。
         股池采用<strong>当前</strong>成分股（存在幸存者偏差，实际收益可能略低），结果作为方向性参考。
       </div>
     </div>
@@ -177,7 +227,7 @@
 </template>
 
 <script setup>
-import { ref, computed, nextTick } from 'vue'
+import { ref, computed, nextTick, watch } from 'vue'
 import { api } from '../api.js'
 
 // ============ 选股部分 ============
@@ -190,6 +240,7 @@ const minMcap = ref(30)
 const minFScore = ref(5)
 const maxPerIndustry = ref(3)
 const weightS = ref(0.15)
+const volatilityPenalty = ref(0.2)
 const excludeST = ref(true)
 const useCache = ref(true)
 
@@ -205,6 +256,26 @@ const error = ref('')
 const columns = computed(() =>
   picks.value.length ? Object.keys(picks.value[0]) : []
 )
+const strategyHintTitle = computed(() =>
+  strategy.value === 'aggressive_alpha' ? '激进 Alpha' : '四因子权重'
+)
+const strategyHintText = computed(() => {
+  if (strategy.value === 'aggressive_alpha') {
+    return `趋势/动量主导，默认持仓 ${topN.value} 只；F-Score < ${minFScore.value} 排除；单行业最多 ${maxPerIndustry.value} 只；波动惩罚 ${volatilityPenalty.value}。`
+  }
+  return `质量 0.35 / 价值 0.35 / 动量 0.15 / 情绪 ${weightS.value}；F-Score < ${minFScore.value} 直接排除；单一申万一级行业最多 ${maxPerIndustry.value} 只。`
+})
+
+watch(strategy, (v) => {
+  if (v === 'aggressive_alpha') {
+    topN.value = 10
+    maxPerIndustry.value = 2
+    volatilityPenalty.value = 0.2
+  } else if (v === 'three_factor') {
+    topN.value = 25
+    maxPerIndustry.value = 3
+  }
+})
 
 function escapeHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
@@ -239,7 +310,10 @@ async function runPicks() {
   changes.value = null
 
   const endpoint = strategy.value === 'three_factor'
-    ? '/strategy/three_factor' : '/strategy/magic_formula'
+    ? '/strategy/three_factor'
+    : strategy.value === 'aggressive_alpha'
+      ? '/strategy/aggressive_alpha'
+      : '/strategy/magic_formula'
   const params = {
     scope: scope.value, top_n: topN.value, min_mcap_yi: minMcap.value,
     exclude_st: excludeST.value, use_cache: useCache.value,
@@ -249,6 +323,10 @@ async function runPicks() {
     params.max_per_industry = maxPerIndustry.value
     params.weight_s = weightS.value
     // 三因子内部 Q/V/M 用默认 0.35/0.35/0.15
+  } else if (strategy.value === 'aggressive_alpha') {
+    params.min_f_score = minFScore.value
+    params.max_per_industry = maxPerIndustry.value
+    params.volatility_penalty = volatilityPenalty.value
   } else {
     params.momentum_weight = 0.3
   }
@@ -271,18 +349,36 @@ async function runPicks() {
 // ============ 回测部分 ============
 const today = new Date().toISOString().slice(0, 10)
 const bt = ref({
+  strategy: 'three_factor',
   start: '2022-01-01',
   end:   today,
   topN:  25,
   scope: 'hs300',
   useTiming: false,           // 上次验证：择时反而拖累，默认关闭
   maxPerIndustry: 3,
+  minFScore: 5,
+  volatilityPenalty: 0.2,
 })
 const btLoading = ref(false)
 const btError = ref('')
 const btResult = ref(null)
+const searchLoading = ref(false)
+const searchError = ref('')
+const searchResult = ref(null)
 const chartCanvas = ref(null)
 let chartInstance = null
+
+watch(() => bt.value.strategy, (v) => {
+  if (v === 'aggressive_alpha') {
+    bt.value.topN = 10
+    bt.value.maxPerIndustry = 2
+    bt.value.useTiming = false
+    bt.value.volatilityPenalty = 0.2
+  } else {
+    bt.value.topN = 25
+    bt.value.maxPerIndustry = 3
+  }
+})
 
 function pctSigned(v) {
   if (v == null) return '—'
@@ -300,10 +396,13 @@ async function runBacktest() {
     const data = await api('/strategy/backtest', {
       start: bt.value.start,
       end:   bt.value.end,
+      strategy: bt.value.strategy,
       top_n: bt.value.topN,
       universe_scope: bt.value.scope,
       use_timing: bt.value.useTiming,
       max_per_industry: bt.value.maxPerIndustry,
+      min_f_score: bt.value.minFScore,
+      volatility_penalty: bt.value.volatilityPenalty,
     })
     btResult.value = data
     await nextTick()
@@ -312,6 +411,22 @@ async function runBacktest() {
     btError.value = e.message || String(e)
   } finally {
     btLoading.value = false
+  }
+}
+
+async function runSearch() {
+  searchLoading.value = true; searchError.value = ''; searchResult.value = null
+  try {
+    searchResult.value = await api('/strategy/search/aggressive_alpha', {
+      start: bt.value.start,
+      end: bt.value.end,
+      universe_scope: bt.value.scope,
+      min_f_score: bt.value.minFScore,
+    })
+  } catch (e) {
+    searchError.value = e.message || String(e)
+  } finally {
+    searchLoading.value = false
   }
 }
 
